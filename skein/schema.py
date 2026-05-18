@@ -49,19 +49,31 @@ CREATE TABLE IF NOT EXISTS skein_build (
 
 
 def infer_embedding_dim(conn: psycopg.Connection) -> int:
-    """Look at one row to figure out the vector dimensionality of `chunks.embedding`."""
+    """Look at one row to figure out the vector dimensionality of
+    `chunks.embedding`.
+
+    docs/bugs/0002: validate the inferred dimension is a plausible positive
+    integer before returning it, since downstream uses it in a SQL format
+    string. Refuses anything outside 16..65536.
+    """
     with conn.cursor() as cur:
         cur.execute("SELECT atttypmod FROM pg_attribute "
                     "WHERE attrelid = 'chunks'::regclass AND attname = 'embedding'")
         row = cur.fetchone()
         if row and row[0] > 0:
-            return int(row[0])
-        # Fallback: read a row
-        cur.execute("SELECT embedding FROM chunks WHERE embedding IS NOT NULL LIMIT 1")
-        r = cur.fetchone()
-        if not r:
-            raise RuntimeError("no chunks with embeddings; ingest data first")
-        return len(r[0])
+            dim = int(row[0])
+        else:
+            # Fallback: read a row
+            cur.execute("SELECT embedding FROM chunks WHERE embedding IS NOT NULL LIMIT 1")
+            r = cur.fetchone()
+            if not r:
+                raise RuntimeError("no chunks with embeddings; ingest data first")
+            dim = int(len(r[0]))
+    if not (16 <= dim <= 65536):
+        raise RuntimeError(
+            f"refusing to construct schema with implausible embedding dimension {dim!r}"
+        )
+    return dim
 
 
 def schema_apply(db_url: str) -> None:

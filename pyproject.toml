@@ -16,6 +16,9 @@ dependencies = [
 [project.scripts]
 skein = "skein.cli:app"
 
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
 [tool.uv]
 package = true
 

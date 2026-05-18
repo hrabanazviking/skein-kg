@@ -121,3 +121,21 @@ version bump.
 Internal helpers (`discover_vocabulary`, `find_mentions`, `build_edges`,
 etc.) are exposed in `skein.core` for advanced use, but their signatures
 may change in any release.
+
+## Language scope
+
+The default `SYSTEM_VOCAB` prompt and `DEFAULT_PREDICATES` list are tuned
+for **English-language narrative content**. The entity-matching regex IS
+Unicode-aware — Norse names with þ, ð, æ, ö, ó match correctly. But for
+non-English corpora (Arabic, Mandarin, Russian, etc.) the LLM-driven
+vocabulary discovery and the predicate vocabulary will under-perform.
+
+To use Skein on a non-English corpus:
+
+1. Override the predicate vocabulary via the `SKEIN_PREDICATES` env var
+   with verbs/predicates appropriate to the target language.
+2. (Advanced) edit `SYSTEM_VOCAB` in `skein/core.py` to instruct the LLM
+   in the target language.
+
+See [`docs/bugs/0007-english-bias-disclosed.md`](docs/bugs/0007-english-bias-disclosed.md)
+for the full history of this disclosure.

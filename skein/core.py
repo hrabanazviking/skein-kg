@@ -20,13 +20,20 @@ import json
 import re
 import time
 from collections import defaultdict
-from pathlib import Path
-from typing import Iterable
+from typing import Callable, TypedDict
 
 import httpx
 import numpy as np
 import psycopg
 from pgvector.psycopg import register_vector
+
+
+# docs/bugs/0004: stable shape of build_skein's return value.
+class SkeinBuildStats(TypedDict):
+    n_entities: int
+    n_mentions: int
+    n_edges: int
+    build_seconds: float
 
 
 # ─── default predicate vocabulary (generic narrative; override via env) ───
@@ -52,16 +59,30 @@ SYSTEM_VOCAB = (
 )
 
 
+# docs/bugs/0008: retry transient HTTP/JSON failures with exponential backoff.
+def _retry(fn: Callable, *, attempts: int = 3, base_delay: float = 2.0):
+    """Call fn() with up to `attempts` retries on transient failures."""
+    for i in range(attempts):
+        try:
+            return fn()
+        except (httpx.HTTPError, json.JSONDecodeError):
+            if i == attempts - 1:
+                raise
+            time.sleep(base_delay * (2 ** i))
+
+
 def _ollama_chat(client: httpx.Client, url: str, model: str, system: str,
                  user: str, *, max_tokens: int = 1200) -> str:
-    r = client.post(f"{url}/api/chat", json={
-        "model": model, "stream": False, "format": "json",
-        "messages": [{"role": "system", "content": system},
-                     {"role": "user", "content": user}],
-        "options": {"num_predict": max_tokens, "temperature": 0.1},
-    }, timeout=300)
-    r.raise_for_status()
-    return r.json()["message"]["content"]
+    def _call():
+        r = client.post(f"{url}/api/chat", json={
+            "model": model, "stream": False, "format": "json",
+            "messages": [{"role": "system", "content": system},
+                         {"role": "user", "content": user}],
+            "options": {"num_predict": max_tokens, "temperature": 0.1},
+        }, timeout=300)
+        r.raise_for_status()
+        return r.json()["message"]["content"]
+    return _retry(_call)
 
 
 def _ollama_embed(client: httpx.Client, url: str, model: str,
@@ -71,11 +92,14 @@ def _ollama_embed(client: httpx.Client, url: str, model: str,
     out: list[list[float]] = []
     # Batch — nomic-embed has no hard cap but keep groups small for memory
     for i in range(0, len(texts), 32):
-        r = client.post(f"{url}/api/embed",
-                        json={"model": model, "input": texts[i:i + 32]},
-                        timeout=300)
-        r.raise_for_status()
-        out.extend(r.json()["embeddings"])
+        batch = texts[i:i + 32]
+        def _call():
+            r = client.post(f"{url}/api/embed",
+                            json={"model": model, "input": batch},
+                            timeout=300)
+            r.raise_for_status()
+            return r.json()["embeddings"]
+        out.extend(_retry(_call))
     return np.array(out, dtype=np.float32)
 
 
@@ -84,13 +108,20 @@ def _normalize_name(s: str) -> str:
 
 
 def _entity_regex(name: str) -> re.Pattern:
-    # Treat any whitespace-separated token list as a phrase; allow flexible
-    # whitespace between tokens. Use word boundaries on the outer edges.
+    r"""Compile a Unicode-aware regex for an entity name (and its aliases).
+
+    docs/bugs/0001: Python's ``\b`` word boundary is ASCII-only. For Norse
+    content (Mímir, Þórr, Þrúðr, Ðagr) and any non-Latin alphabet the
+    boundary fails to match consistently. We use explicit Unicode-aware
+    lookarounds with ``\w`` (which IS Unicode-aware under ``re.UNICODE``,
+    on by default in Python 3) so the boundary treats letters of any
+    script identically.
+    """
     parts = [re.escape(p) for p in name.split() if p]
     if not parts:
         return re.compile(r"$^")  # never matches
     body = r"\s+".join(parts)
-    return re.compile(rf"\b{body}\b", re.IGNORECASE)
+    return re.compile(rf"(?<!\w){body}(?!\w)", re.IGNORECASE | re.UNICODE)
 
 
 def _parse_vocab_response(raw: str) -> list[dict]:
@@ -111,9 +142,13 @@ def _parse_vocab_response(raw: str) -> list[dict]:
 def discover_vocabulary(
     db_url: str, *, ollama_url: str, chat_model: str,
     samples_per_doc: int = 6, sample_chars: int = 1800,
-    log=None,
+    log: Callable[[str], None] | None = None,
 ) -> list[dict]:
-    """One LLM call per document → list of {name, kind, aliases}."""
+    """One LLM call per document → list of {name, kind, aliases}.
+
+    docs/bugs/0003: `log` is typed as `Callable[[str], None] | None`.
+    docs/bugs/0006: per-doc accepted/dropped counts are reported via `log`.
+    """
     with psycopg.connect(db_url) as conn, conn.cursor() as cur:
         cur.execute("SELECT id, title FROM documents ORDER BY id")
         docs = cur.fetchall()
@@ -138,11 +173,15 @@ def discover_vocabulary(
             except Exception as e:
                 if log: log(f"  doc {doc_id} '{title}': vocab call failed — {e}")
                 continue
+            n_accepted = 0
+            n_dropped = 0
             for e in ents:
                 if not isinstance(e, dict):
+                    n_dropped += 1
                     continue
                 name = (e.get("name") or "").strip()
                 if not name or len(name) > 100:
+                    n_dropped += 1
                     continue
                 kind = (e.get("kind") or "other").strip().lower()[:32] or "other"
                 aliases = [a.strip() for a in (e.get("aliases") or [])
@@ -152,7 +191,12 @@ def discover_vocabulary(
                     vocab[key]["aliases"] = list({*vocab[key]["aliases"], *aliases})
                 else:
                     vocab[key] = {"name": name, "kind": kind, "aliases": aliases}
-            if log: log(f"  doc {doc_id} '{title}': +{len(ents)} entities")
+                n_accepted += 1
+            if log:
+                if n_dropped:
+                    log(f"  doc {doc_id} '{title}': +{n_accepted} (dropped {n_dropped} malformed)")
+                else:
+                    log(f"  doc {doc_id} '{title}': +{n_accepted} entities")
     return list(vocab.values())
 
 
@@ -235,7 +279,8 @@ def snap_predicates(
     db_url: str, *, ollama_url: str, embed_model: str,
     keys: list[str], names_canonical: list[str],
     mentions: dict[str, set[int]], edges: list[tuple[int, int, float]],
-    predicates: list[str], window: int = 120, log=None,
+    predicates: list[str], window: int = 120,
+    log: Callable[[str], None] | None = None,
 ) -> dict[tuple[int, int], tuple[str, list[int]]]:
     """For each edge, embed text-between-mentions in co-occurrence chunks; snap to nearest predicate."""
     if not edges:
@@ -346,8 +391,8 @@ def build_skein(
     db_url: str, *, ollama_url: str, embed_model: str, chat_model: str,
     predicates: list[str] | None = None,
     top_k: int = 6, min_sim: float = 0.55, window: int = 120,
-    log=print,
-) -> dict:
+    log: Callable[[str], None] = print,
+) -> SkeinBuildStats:
     from skein.schema import schema_apply
     schema_apply(db_url)
     predicates = predicates or DEFAULT_PREDICATES

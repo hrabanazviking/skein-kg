@@ -81,6 +81,7 @@ Each predicate is embedded as `"X {predicate} Y"` once at build time; per-edge p
 
 ## Limits & honesty
 
+- **Language scope.** Skein's default predicate vocabulary and its entity-discovery prompt are tuned for **English-language narrative content**. For non-English corpora, supply your own `SKEIN_PREDICATES` env var and consider running entity discovery in the target language (see `SYSTEM_VOCAB` in `skein/core.py`). The entity-matching regex IS Unicode-aware (Norse names like Mímir, Þórr, Þrúðr match correctly — see [`docs/bugs/0001-non-ascii-word-boundary.md`](docs/bugs/0001-non-ascii-word-boundary.md)).
 - Predicate granularity is bounded by your vocabulary. Skein won't invent `sacrificed_eye_to`; the closest it'll get is `gave_to` (or whatever's in the list).
 - Same name spelled differently (Odin / Wotan / Allfather) becomes separate nodes unless you provide aliases. The per-document LLM call is asked to list aliases too.
 - It can't do fine-grained event extraction. For that, you still want a per-chunk LLM pass.
