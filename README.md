@@ -68,7 +68,7 @@ Each predicate is embedded as `"X {predicate} Y"` once at build time; per-edge p
 
 ## Status
 
-Co-invented by a user and Claude during a single session, May 2026. Lives at `~/ai/skein-kg/`. Open to becoming a real library if useful to others.
+Co-invented by Volmarr Wyrd and Claude during a single session, May 2026. Lives at `~/ai/skein-kg/`. Open to becoming a real library if useful to others.
 
 ## License
 
