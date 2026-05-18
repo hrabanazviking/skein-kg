@@ -2,8 +2,6 @@
 
 > *a coil of threads connecting names*
 
-> "This sure beats melting my gaming laptop!"
-
 Skein builds a **knowledge graph** (entities + typed relations + provenance) over a corpus of text chunks **without ever running autoregressive LLM extraction per chunk.** It's designed for laptop-scale corpora (10k–500k chunks) where you've already got embeddings sitting in a vector store.
 
 Companion project: [`skry-kg`](https://github.com/hrabanazviking/skry-kg) — the query-time projection.
@@ -21,6 +19,8 @@ The expensive step in conventional KG extraction is making an LLM read every chu
 That's it. No autoregressive generation. ~1/500 the GPU work of a per-chunk LLM extractor, with ~75% of the graph quality.
 
 ## Why "Skein"
+
+> "This sure beats melting my gaming laptop!"
 
 A skein is a loose coil of thread or yarn — and a flock of geese in flight. Both fit: the woven web of entities, and the way related concepts move together through a corpus.
 
