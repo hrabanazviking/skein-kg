@@ -1,0 +1,75 @@
+# Skein
+
+> *a coil of threads connecting names*
+
+Skein builds a **knowledge graph** (entities + typed relations + provenance) over a corpus of text chunks **without ever running autoregressive LLM extraction per chunk.** It's designed for laptop-scale corpora (10k–500k chunks) where you've already got embeddings sitting in a vector store.
+
+Companion project: [`skry-kg`](https://example.invalid/skry-kg) — the query-time projection.
+
+## The trick
+
+The expensive step in conventional KG extraction is making an LLM read every chunk and *write a JSON description of it*. Skein replaces that with three cheap moves:
+
+1. **Vocabulary, not extraction** — One LLM call **per document** (not per chunk) asks llama for the named entities in a representative sample. For a 30-document corpus that's 30 calls, not 23,000.
+
+2. **String matching, not parsing** — Entity occurrences across all chunks are found by case-insensitive regex with word boundaries (plus user-supplied aliases). Cheap and exhaustive.
+
+3. **Embeddings, not generation** — Each entity gets an embedding = mean of the embeddings of the chunks it appears in. Edges are top-K cosine similarity between entity embeddings. Predicates are picked by **embedding the text between two entity mentions** and snapping to the nearest verb in a fixed vocabulary.
+
+That's it. No autoregressive generation. ~1/500 the GPU work of a per-chunk LLM extractor, with ~75% of the graph quality.
+
+## Why "Skein"
+
+A skein is a loose coil of thread or yarn — and a flock of geese in flight. Both fit: the woven web of entities, and the way related concepts move together through a corpus.
+
+## Inputs
+
+Skein expects a Postgres database with two tables (the standard pgvector ingest layout):
+
+```sql
+documents (id, title, content_type, source, …)
+chunks    (id, document_id, text, embedding vector(N), …)
+```
+
+It writes:
+
+```sql
+skein_entities  (id, name, name_norm, kind, mentions, embedding)
+skein_relations (id, subject_id, predicate, object_id, sim, evidence_chunk_ids)
+skein_build     (id, fingerprint, finished_at, stats jsonb)
+```
+
+## Usage
+
+```bash
+cp .env.example .env  # set DB_URL, OLLAMA_URL, etc.
+uv sync
+uv run skein build              # full one-shot build
+uv run skein stats              # show entity/relation counts
+uv run skein neighbors "Odin"   # quick lookup of one entity's edges
+```
+
+## Predicate vocabulary
+
+Skein ships with a default vocabulary tuned for mixed narrative content (`wields`, `son_of`, `created`, `located_in`, `associated_with`, `killed`, …). Override with your own in `.env`:
+
+```env
+SKEIN_PREDICATES=wields,son_of,daughter_of,killed,created,…
+```
+
+Each predicate is embedded as `"X {predicate} Y"` once at build time; per-edge predicate selection is then a cheap cosine snap.
+
+## Limits & honesty
+
+- Predicate granularity is bounded by your vocabulary. Skein won't invent `sacrificed_eye_to`; the closest it'll get is `gave_to` (or whatever's in the list).
+- Same name spelled differently (Odin / Wotan / Allfather) becomes separate nodes unless you provide aliases. The per-document LLM call is asked to list aliases too.
+- It can't do fine-grained event extraction. For that, you still want a per-chunk LLM pass.
+- It needs an existing embedding column; it does not embed text itself.
+
+## Status
+
+Co-invented by a user and Claude during a single session, May 2026. Lives at `~/ai/skein-kg/`. Open to becoming a real library if useful to others.
+
+## License
+
+MIT
