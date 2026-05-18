@@ -4,7 +4,7 @@
 
 Skein builds a **knowledge graph** (entities + typed relations + provenance) over a corpus of text chunks **without ever running autoregressive LLM extraction per chunk.** It's designed for laptop-scale corpora (10k–500k chunks) where you've already got embeddings sitting in a vector store.
 
-Companion project: [`skry-kg`](https://example.invalid/skry-kg) — the query-time projection.
+Companion project: [`skry-kg`](https://github.com/hrabanazviking/skry-kg) — the query-time projection.
 
 ## The trick
 
