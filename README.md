@@ -12,6 +12,12 @@ Skein builds a **knowledge graph** (entities + typed relations + provenance) ove
 
 Companion project: [`skry-kg`](https://github.com/hrabanazviking/skry-kg) — the query-time projection.
 
+---
+
+![https://raw.githubusercontent.com/hrabanazviking/skein-kg/refs/heads/main/Screenshot_20260518_173244.png](https://raw.githubusercontent.com/hrabanazviking/skein-kg/refs/heads/main/Screenshot_20260518_173244.png)
+
+---
+
 ## The trick
 
 The expensive step in conventional KG extraction is making an LLM read every chunk and *write a JSON description of it*. Skein replaces that with three cheap moves:
