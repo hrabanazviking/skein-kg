@@ -18,6 +18,12 @@ The expensive step in conventional KG extraction is making an LLM read every chu
 
 That's it. No autoregressive generation. ~1/500 the GPU work of a per-chunk LLM extractor, with ~75% of the graph quality.
 
+---
+
+![https://raw.githubusercontent.com/hrabanazviking/skein-kg/refs/heads/main/39b17892-706e-4a0f-afa6-a5e8a2081602.jpeg](https://raw.githubusercontent.com/hrabanazviking/skein-kg/refs/heads/main/39b17892-706e-4a0f-afa6-a5e8a2081602.jpeg)
+
+---
+
 ## Why "Skein"
 
 > "This sure beats melting my gaming laptop!"
