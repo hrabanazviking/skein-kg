@@ -1,3 +1,9 @@
+---
+
+![https://raw.githubusercontent.com/hrabanazviking/skein-kg/refs/heads/main/4dca0eb9-1142-4713-98c5-e8842ce86df6.jpeg](https://raw.githubusercontent.com/hrabanazviking/skein-kg/refs/heads/main/4dca0eb9-1142-4713-98c5-e8842ce86df6.jpeg)
+
+---
+
 # Skein
 
 > *a coil of threads connecting names*
