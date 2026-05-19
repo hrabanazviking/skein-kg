@@ -275,6 +275,123 @@ def build_edges(
     return [(a, b, s) for (a, b), s in out.items()]
 
 
+# ─── snap_predicates: phase helpers (docs/bugs/0009) ────────────────────────
+
+def _embed_predicate_vocabulary(
+    predicates: list[str], *, ollama_url: str, embed_model: str,
+) -> np.ndarray:
+    """Embed each predicate via a fixed template and return L2-normalized."""
+    with httpx.Client() as client:
+        pred_emb = _ollama_embed(
+            client, ollama_url, embed_model,
+            [f"is {p.replace('_', ' ')}" for p in predicates],
+        )
+    return pred_emb / np.clip(np.linalg.norm(pred_emb, axis=1, keepdims=True), 1e-9, None)
+
+
+def _cooccurrence_chunks_per_edge(
+    edges: list[tuple[int, int, float]],
+    keys: list[str], mentions: dict[str, set[int]],
+    cap: int = 8,
+) -> dict[tuple[int, int], list[int]]:
+    """For each edge, return the (capped, sorted) list of chunks where both
+    endpoints are mentioned."""
+    out: dict[tuple[int, int], list[int]] = {}
+    for a, b, _ in edges:
+        common = sorted(mentions[keys[a]] & mentions[keys[b]])[:cap]
+        if common:
+            out[(a, b)] = common
+    return out
+
+
+def _fetch_chunk_texts(db_url: str, chunk_ids: list[int]) -> dict[int, str]:
+    """One DB round-trip for all the chunk texts needed by predicate snap."""
+    if not chunk_ids:
+        return {}
+    needed = sorted(set(chunk_ids))
+    with psycopg.connect(db_url) as conn, conn.cursor() as cur:
+        cur.execute("SELECT id, text FROM chunks WHERE id = ANY(%s)", (needed,))
+        return {cid: t for cid, t in cur.fetchall()}
+
+
+def _closest_mention_pair_span(
+    text: str, pat_a: re.Pattern, pat_b: re.Pattern, window: int,
+) -> str | None:
+    """Find the smallest-gap mention pair in `text`; return the surrounding
+    text-between-mentions span (with a small ±window/4 cushion) or None."""
+    ma = list(pat_a.finditer(text))
+    mb = list(pat_b.finditer(text))
+    if not ma or not mb:
+        return None
+    best: tuple[int, int, int] | None = None
+    for x in ma:
+        for y in mb:
+            if x.start() == y.start():
+                continue
+            if x.end() <= y.start():
+                lo, hi = x.end(), y.start()
+            elif y.end() <= x.start():
+                lo, hi = y.end(), x.start()
+            else:
+                continue
+            gap = hi - lo
+            if best is None or gap < best[0]:
+                best = (gap, lo, hi)
+    if best is None:
+        return None
+    _, lo, hi = best
+    lo2 = max(0, lo - window // 4)
+    hi2 = min(len(text), hi + window // 4)
+    span = text[lo2:hi2].strip()
+    return span[:480] if span else None
+
+
+def _collect_predicate_spans(
+    edge_chunks: dict[tuple[int, int], list[int]],
+    chunk_text: dict[int, str],
+    names_canonical: list[str], window: int,
+) -> tuple[list[str], dict[tuple[int, int], list[int]]]:
+    """Build the flat list of span_texts plus a per-edge index map into it."""
+    span_texts: list[str] = []
+    span_groups: dict[tuple[int, int], list[int]] = defaultdict(list)
+    pat_cache: dict[int, re.Pattern] = {}
+    for (a, b), chunk_ids in edge_chunks.items():
+        pa = pat_cache.setdefault(a, _entity_regex(names_canonical[a]))
+        pb = pat_cache.setdefault(b, _entity_regex(names_canonical[b]))
+        for cid in chunk_ids:
+            text = chunk_text.get(cid, "")
+            if not text:
+                continue
+            span = _closest_mention_pair_span(text, pa, pb, window)
+            if span is None:
+                continue
+            span_texts.append(span)
+            span_groups[(a, b)].append(len(span_texts) - 1)
+    return span_texts, span_groups
+
+
+def _snap_best_predicates(
+    span_texts: list[str], span_groups: dict[tuple[int, int], list[int]],
+    pred_emb: np.ndarray, predicates: list[str],
+    edge_chunks: dict[tuple[int, int], list[int]],
+    *, ollama_url: str, embed_model: str,
+) -> dict[tuple[int, int], tuple[str, list[int]]]:
+    """Embed the spans, mean-pool per edge, snap to the nearest predicate."""
+    with httpx.Client() as client:
+        span_emb = _ollama_embed(client, ollama_url, embed_model, span_texts)
+    span_emb = span_emb / np.clip(np.linalg.norm(span_emb, axis=1, keepdims=True), 1e-9, None)
+    out: dict[tuple[int, int], tuple[str, list[int]]] = {}
+    for (a, b), idxs in span_groups.items():
+        v = np.mean(span_emb[idxs], axis=0)
+        norm = np.linalg.norm(v)
+        if norm > 0:
+            v = v / norm
+        scores = pred_emb @ v
+        best = int(np.argmax(scores))
+        out[(a, b)] = (predicates[best], edge_chunks[(a, b)])
+    return out
+
+
 def snap_predicates(
     db_url: str, *, ollama_url: str, embed_model: str,
     keys: list[str], names_canonical: list[str],
@@ -282,100 +399,43 @@ def snap_predicates(
     predicates: list[str], window: int = 120,
     log: Callable[[str], None] | None = None,
 ) -> dict[tuple[int, int], tuple[str, list[int]]]:
-    """For each edge, embed text-between-mentions in co-occurrence chunks; snap to nearest predicate."""
+    """Orchestrator — each phase is a helper above.
+
+    For each candidate edge, find co-occurrence chunks, extract the
+    text-between-mentions, embed it, and snap to the nearest predicate in
+    the fixed vocabulary by cosine similarity.
+
+    docs/bugs/0009: refactored from a 100-line single function into five
+    named helpers, each under 50 lines.
+    """
     if not edges:
         return {}
 
-    # 1. Embed each predicate as a templated sentence
-    with httpx.Client() as client:
-        pred_emb = _ollama_embed(
-            client, ollama_url, embed_model,
-            [f"is {p.replace('_', ' ')}" for p in predicates],
-        )
-    pred_emb = pred_emb / np.clip(np.linalg.norm(pred_emb, axis=1, keepdims=True), 1e-9, None)
+    pred_emb = _embed_predicate_vocabulary(
+        predicates, ollama_url=ollama_url, embed_model=embed_model,
+    )
 
-    # 2. For each edge, find co-occurrence chunks
-    edge_chunks: dict[tuple[int, int], list[int]] = {}
-    for a, b, _ in edges:
-        common = sorted(mentions[keys[a]] & mentions[keys[b]])[:8]
-        if common:
-            edge_chunks[(a, b)] = common
-
+    edge_chunks = _cooccurrence_chunks_per_edge(edges, keys, mentions)
     if not edge_chunks:
         return {}
 
-    # 3. Fetch chunk texts in one batch
-    needed = sorted({c for cs in edge_chunks.values() for c in cs})
-    with psycopg.connect(db_url) as conn, conn.cursor() as cur:
-        cur.execute("SELECT id, text FROM chunks WHERE id = ANY(%s)", (needed,))
-        chunk_text = {cid: t for cid, t in cur.fetchall()}
+    chunk_text = _fetch_chunk_texts(
+        db_url, [c for cs in edge_chunks.values() for c in cs],
+    )
 
-    # 4. For each edge, extract spans between mentions, embed, snap to predicate
-    out: dict[tuple[int, int], tuple[str, list[int]]] = {}
-    span_texts: list[str] = []
-    span_keys: list[tuple[int, int]] = []
-    span_groups: dict[tuple[int, int], list[int]] = defaultdict(list)
-
-    pat_cache: dict[int, re.Pattern] = {}
-    def _get_pat(idx: int) -> re.Pattern:
-        if idx not in pat_cache:
-            pat_cache[idx] = _entity_regex(names_canonical[idx])
-        return pat_cache[idx]
-
-    for (a, b), chunk_ids in edge_chunks.items():
-        for cid in chunk_ids:
-            t = chunk_text.get(cid, "")
-            if not t:
-                continue
-            ma = list(_get_pat(a).finditer(t))
-            mb = list(_get_pat(b).finditer(t))
-            if not ma or not mb:
-                continue
-            # pick the closest mention pair
-            best = None
-            for x in ma:
-                for y in mb:
-                    if x.start() == y.start():
-                        continue
-                    if x.end() <= y.start():
-                        lo, hi = x.end(), y.start()
-                    elif y.end() <= x.start():
-                        lo, hi = y.end(), x.start()
-                    else:
-                        continue
-                    gap = hi - lo
-                    if best is None or gap < best[0]:
-                        best = (gap, lo, hi)
-            if best is None:
-                continue
-            gap, lo, hi = best
-            # Expand window slightly so we capture the verb/prep around the gap
-            lo2 = max(0, lo - window // 4)
-            hi2 = min(len(t), hi + window // 4)
-            span = t[lo2:hi2].strip()
-            if not span:
-                continue
-            span_texts.append(span[:480])
-            span_keys.append((a, b))
-            span_groups[(a, b)].append(len(span_texts) - 1)
-
+    span_texts, span_groups = _collect_predicate_spans(
+        edge_chunks, chunk_text, names_canonical, window,
+    )
     if not span_texts:
         return {}
 
-    if log: log(f"  embedding {len(span_texts)} predicate spans for {len(edge_chunks)} edges…")
-    with httpx.Client() as client:
-        span_emb = _ollama_embed(client, ollama_url, embed_model, span_texts)
-    span_emb = span_emb / np.clip(np.linalg.norm(span_emb, axis=1, keepdims=True), 1e-9, None)
+    if log:
+        log(f"  embedding {len(span_texts)} predicate spans for {len(edge_chunks)} edges…")
 
-    for (a, b), idxs in span_groups.items():
-        v = np.mean(span_emb[idxs], axis=0)
-        n = np.linalg.norm(v)
-        if n > 0:
-            v = v / n
-        scores = pred_emb @ v
-        best = int(np.argmax(scores))
-        out[(a, b)] = (predicates[best], edge_chunks[(a, b)])
-    return out
+    return _snap_best_predicates(
+        span_texts, span_groups, pred_emb, predicates, edge_chunks,
+        ollama_url=ollama_url, embed_model=embed_model,
+    )
 
 
 def fingerprint(db_url: str) -> str:

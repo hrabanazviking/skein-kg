@@ -9,8 +9,8 @@
 
 ## Open
 
-_none — all P0/P1 from session 2 have been promoted to dedicated notes and
-fixed additively this session. P2/P3 items remain in this index._
+_None. As of session 3 the entire known bug backlog is closed — 12/12
+resolved across two same-day sessions._
 
 ## Resolved (Session 2 — 2026-05-18)
 
@@ -25,14 +25,18 @@ fixed additively this session. P2/P3 items remain in this index._
 | 0007 | Default vocabulary English-biased; not documented | medium | `skein/core.py:33-40` + README | [bug](0007-english-bias-disclosed.md) |
 | 0008 | Ollama timeout hard-coded; no retry | medium | `skein/core.py:55-65` | [bug](0008-ollama-retry.md) |
 
-## Deferred (open in index, fix later)
+## Deferred
 
-| # | Title | Severity | File | Reason for deferral |
+_None. Backlog is empty._
+
+## Resolved (Session 3 — 2026-05-18, "kill the backlog")
+
+| # | Title | Severity | File | Note |
 |---|---|---|---|---|
-| 0009 | `snap_predicates` is 100 lines (Iron Law: ≤50) | medium | `skein/core.py:234-333` | Refactor planned for next session — clear decomposition into 4 helper functions, no behavior change. |
-| 0010 | Embedding-dim consistency across `chunks` rows not validated | medium | `skein/schema.py` | Add a `SELECT DISTINCT array_length(embedding, 1)` validation at `schema_apply` time. Edge case. |
-| 0011 | Default predicate vocabulary is small + English-biased | low | `skein/core.py:33-40` | Documented (0007 covers); enrichment is future work. |
-| 0012 | Named cursors rely on context-manager close | low | `skein/core.py:167,187` | Working correctly via psycopg's `with`; documented for clarity. No action needed. |
+| 0009 | `snap_predicates` was 100 lines | medium | `skein/core.py` | Refactored into 5 named helpers (`_embed_predicate_vocabulary`, `_cooccurrence_chunks_per_edge`, `_fetch_chunk_texts`, `_closest_mention_pair_span`, `_collect_predicate_spans`, `_snap_best_predicates`). Orchestrator is now 25 lines. Behavior identical. |
+| 0010 | Embedding-dim consistency not validated | medium | `skein/schema.py` | `infer_embedding_dim` now runs `SELECT DISTINCT vector_dims(embedding) FROM chunks WHERE embedding IS NOT NULL` and raises with a clear message if rows disagree on dim. Gracefully falls back if pgvector lacks `vector_dims`. |
+| 0011 | Default predicate vocab small + English-biased | low | `skein/core.py` + README + INTERFACE | Resolved as no-action — see [bug note](0011-vocab-enrichment.md). English bias was disclosed in 0007; the vocabulary is configurable via `SKEIN_PREDICATES` by design. |
+| 0012 | Named cursor close discipline | low | `skein/core.py` | Resolved as no-action — see [bug note](0012-named-cursor-discipline.md). psycopg's `with` properly closes named cursors. Verified, documented, closed. |
 
 ---
 

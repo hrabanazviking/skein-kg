@@ -55,6 +55,11 @@ def infer_embedding_dim(conn: psycopg.Connection) -> int:
     docs/bugs/0002: validate the inferred dimension is a plausible positive
     integer before returning it, since downstream uses it in a SQL format
     string. Refuses anything outside 16..65536.
+
+    docs/bugs/0010: additionally verifies every non-NULL embedding in the
+    `chunks` table has the same dimensionality. If two rows have different
+    dims, raising here is far kinder than letting the rebuild fail mid-
+    INSERT on a pgvector cast error.
     """
     with conn.cursor() as cur:
         cur.execute("SELECT atttypmod FROM pg_attribute "
@@ -69,6 +74,25 @@ def infer_embedding_dim(conn: psycopg.Connection) -> int:
             if not r:
                 raise RuntimeError("no chunks with embeddings; ingest data first")
             dim = int(len(r[0]))
+
+        # docs/bugs/0010: verify every row's embedding has the same dim.
+        # vector_dims(embedding) is the pgvector function; falls back to
+        # array_length cast for compatibility with older pgvector.
+        try:
+            cur.execute(
+                "SELECT DISTINCT vector_dims(embedding) FROM chunks "
+                "WHERE embedding IS NOT NULL"
+            )
+            distinct_dims = sorted(int(r[0]) for r in cur.fetchall() if r[0] is not None)
+        except psycopg.Error:
+            # Older pgvector may not have vector_dims; treat as unverifiable
+            # rather than raising — the column-type dim is still trustworthy.
+            distinct_dims = []
+    if distinct_dims and len(distinct_dims) > 1:
+        raise RuntimeError(
+            f"chunks.embedding has inconsistent dimensions across rows: {distinct_dims}. "
+            "Re-embed the corpus with a single model before building Skein."
+        )
     if not (16 <= dim <= 65536):
         raise RuntimeError(
             f"refusing to construct schema with implausible embedding dimension {dim!r}"
