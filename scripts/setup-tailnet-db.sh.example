@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Open this Postgres DB to other machines on your Tailscale tailnet.
+# Copy to setup-tailnet-db.sh (gitignored), fill in the personal values, run on the DB host.
+# Idempotent — safe to re-run.
+set -euo pipefail
+
+# === Personal config — fill these in ===
+DB_NAME="REPLACE_ME"           # e.g. knowledge
+DB_USER="REPLACE_ME"           # role on the server (often your unix username)
+DB_PASSWORD="REPLACE_ME"       # generate one: openssl rand -base64 24
+LISTEN_IP="REPLACE_ME"         # this host's tailnet IP (tailscale ip -4)
+PG_VERSION="REPLACE_ME"        # e.g. 18 — check: ls /etc/postgresql/
+# =======================================
+
+TAILNET_CIDR="100.64.0.0/10"   # Tailscale CGNAT range — covers every node on your tailnet
+PG_HBA="/etc/postgresql/${PG_VERSION}/main/pg_hba.conf"
+PG_CONF="/etc/postgresql/${PG_VERSION}/main/postgresql.conf"
+
+# 1. Verify postgres listens on the tailnet IP
+CURRENT_LISTEN=$(sudo -u postgres psql -tAc "SHOW listen_addresses;" | tr -d ' ')
+case "$CURRENT_LISTEN" in
+  "*"|*"${LISTEN_IP}"*)
+    echo "[ok] listen_addresses already covers ${LISTEN_IP} (= ${CURRENT_LISTEN})"
+    ;;
+  *)
+    echo "[!] listen_addresses = '${CURRENT_LISTEN}'"
+    echo "    Add '${LISTEN_IP}' to listen_addresses in ${PG_CONF}, restart postgres, then re-run."
+    exit 1
+    ;;
+esac
+
+# 2. Add pg_hba rule for tailnet clients
+HBA_LINE="host    ${DB_NAME}    ${DB_USER}    ${TAILNET_CIDR}    scram-sha-256"
+if sudo grep -qF "$HBA_LINE" "$PG_HBA"; then
+  echo "[ok] pg_hba already has tailnet rule for ${DB_USER}/${DB_NAME}"
+else
+  echo "$HBA_LINE" | sudo tee -a "$PG_HBA" > /dev/null
+  echo "[+] added pg_hba rule"
+fi
+
+# 3. Set / reset password on the role
+sudo -u postgres psql -c "ALTER ROLE ${DB_USER} WITH PASSWORD '${DB_PASSWORD}';" > /dev/null
+echo "[+] role password set"
+
+# 4. Reload
+sudo systemctl reload postgresql
+echo "[ok] postgres reloaded"
+
+echo
+echo "Other tailnet machines can now connect:"
+echo "  psql -h <this-host-tailnet-name> -U ${DB_USER} -d ${DB_NAME}"
+echo "  Password lives in your local setup-tailnet-db.sh (gitignored)."

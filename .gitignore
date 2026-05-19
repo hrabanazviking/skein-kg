@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .env
+scripts/setup-tailnet-db.sh
 *.log
 .cache/
 build/
