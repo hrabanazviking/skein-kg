@@ -165,3 +165,6 @@ coverage. Bifröst additionally proves exact Unicode payload mounting/replay and
 append-only privileges against an isolated PostgreSQL database and real Ollama.
 Production source integrity is checked with the read-only ingest doctor. See the
 recovery task brief and technical manual for behavior and operating limits.
+
+Final audit: reject invalid coverage settings before contacting PostgreSQL or
+Ollama. All 47 Skein checks pass.

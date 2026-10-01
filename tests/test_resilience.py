@@ -99,6 +99,13 @@ def test_discovery_quality_threshold_is_configurable_and_validated(monkeypatch):
         coverage(vocab)
 
 
+def test_invalid_recovery_policy_fails_before_connecting(monkeypatch):
+    monkeypatch.setenv("SKEIN_MAX_FAILED_DOCUMENTS_PERCENT", "NaN")
+    monkeypatch.setattr(core, "build_lock", lambda url: pytest.fail("must validate before connection/model work"))
+    with pytest.raises(ValueError):
+        core.build_skein("unused", ollama_url="url", embed_model="embed", chat_model="chat")
+
+
 def test_large_finite_embeddings_normalize_without_overflow():
     actual = core._unit_rows(np.array([[1e30, 1e30]], dtype=np.float32))
     assert np.isfinite(actual).all()

@@ -513,6 +513,7 @@ def build_skein(
     top_k: int = 6, min_sim: float = 0.55, window: int = 120,
     log: Callable[[str], None] = print,
 ) -> SkeinBuildStats:
+    coverage([])  # validate recovery policy before any DB or model work
     with build_lock(db_url) as lock_connection:
         return _build_locked(db_url, ollama_url=ollama_url, embed_model=embed_model,
                              chat_model=chat_model, predicates=predicates, top_k=top_k,

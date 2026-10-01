@@ -23,7 +23,7 @@ remote AI administrative permission is authorized by this implementation.
 The 0.1.1 build uses a database session advisory lock and validated discovery
 coverage before publication. Malformed model responses count as failed discovery.
 Unit-vector normalization uses wider arithmetic; cancelling means are excluded.
-The public build signature remains stable. All 46 Skein fault/invariant tests pass;
+The public build signature remains stable. All 47 Skein fault/invariant tests pass;
 Bifröst's real isolated-database check proves competing builders are refused and
 the lock is released afterward. Technical/interface manuals record the settings
 and limits. No live graph rebuild or source-table writes were used for validation.
