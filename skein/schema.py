@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import psycopg
+import os
 
 
 SCHEMA_SQL = """
@@ -79,11 +80,12 @@ def infer_embedding_dim(conn: psycopg.Connection) -> int:
         # vector_dims(embedding) is the pgvector function; falls back to
         # array_length cast for compatibility with older pgvector.
         try:
-            cur.execute(
-                "SELECT DISTINCT vector_dims(embedding) FROM chunks "
-                "WHERE embedding IS NOT NULL"
-            )
-            distinct_dims = sorted(int(r[0]) for r in cur.fetchall() if r[0] is not None)
+            with conn.transaction():
+                cur.execute(
+                    "SELECT DISTINCT vector_dims(embedding) FROM chunks "
+                    "WHERE embedding IS NOT NULL"
+                )
+                distinct_dims = sorted(int(r[0]) for r in cur.fetchall() if r[0] is not None)
         except psycopg.Error:
             # Older pgvector may not have vector_dims; treat as unverifiable
             # rather than raising — the column-type dim is still trustworthy.
@@ -101,7 +103,7 @@ def infer_embedding_dim(conn: psycopg.Connection) -> int:
 
 
 def schema_apply(db_url: str) -> None:
-    with psycopg.connect(db_url) as conn:
+    with psycopg.connect(db_url, connect_timeout=int(os.getenv("SKEIN_DB_CONNECT_TIMEOUT", "5"))) as conn:
         dim = infer_embedding_dim(conn)
         with conn.cursor() as cur:
             cur.execute(SCHEMA_SQL.format(dim=dim))

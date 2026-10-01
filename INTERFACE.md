@@ -139,3 +139,10 @@ To use Skein on a non-English corpus:
 
 See [`docs/bugs/0007-english-bias-disclosed.md`](docs/bugs/0007-english-bias-disclosed.md)
 for the full history of this disclosure.
+
+## 2026-09-30 resilience guarantees
+
+Database connection setup has a bounded timeout. Embedding response cardinality,
+dimensions, finiteness and nonzero vectors are validated before use. Existing
+public function signatures remain stable.
+Vocabulary fields are type-checked before normalization. Empty usable discovery or source changes during a build raise an actionable error and retain the previous graph. Cosine edge work uses configurable row blocks. SKEIN_DB_CONNECT_TIMEOUT and SKEIN_EDGE_BLOCK_SIZE configure connection and memory behavior. Optional dimension probes roll back their savepoint when unavailable.

@@ -30,3 +30,12 @@ Add regression tests for observed failure paths, run existing tests, validate se
 3. Implement the scoped fixes and regression tests.
 4. Deploy locally and verify behavior.
 5. Update architecture/interface/devlog documentation and push verified changes.
+
+## Completed verification
+
+2026-09-30: 37 tests pass, including malformed vocabulary fields, incomplete and
+nonfinite embedding batches, nonretryable HTTP errors, empty build preservation
+and blocked cosine edges compared with the dense reference. Ruff passes for
+changed core/schema/test modules. The installed Bifrost environment was rebuilt
+with these sources. Its existing entity graph remains intact; no destructive
+schema migration or full production rediscovery was performed.

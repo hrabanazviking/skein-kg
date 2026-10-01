@@ -17,6 +17,7 @@ The only LLM autoregressive work is step 1 — and only one call per document.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from collections import defaultdict
@@ -26,6 +27,22 @@ import httpx
 import numpy as np
 import psycopg
 from pgvector.psycopg import register_vector
+
+
+def _connect(db_url: str) -> psycopg.Connection:
+    return psycopg.connect(db_url, connect_timeout=int(os.getenv("SKEIN_DB_CONNECT_TIMEOUT", "5")))
+
+
+def _validated_embeddings(payload: object, expected: int) -> np.ndarray:
+    """Refuse partial, ragged, zero or nonfinite vectors before graph work."""
+    try:
+        vectors = np.asarray(payload, dtype=np.float32)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("embedding service returned malformed vectors") from exc
+    if (vectors.ndim != 2 or vectors.shape[0] != expected or not vectors.shape[1]
+            or not np.isfinite(vectors).all() or not np.all(np.any(vectors, axis=1))):
+        raise ValueError("embedding service returned invalid or incomplete vectors")
+    return vectors
 
 
 # docs/bugs/0004: stable shape of build_skein's return value.
@@ -65,7 +82,10 @@ def _retry(fn: Callable, *, attempts: int = 3, base_delay: float = 2.0):
     for i in range(attempts):
         try:
             return fn()
-        except (httpx.HTTPError, json.JSONDecodeError):
+        except (httpx.HTTPError, json.JSONDecodeError) as exc:
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code < 500:
+                if exc.response.status_code not in (408, 429):
+                    raise
             if i == attempts - 1:
                 raise
             time.sleep(base_delay * (2 ** i))
@@ -99,8 +119,11 @@ def _ollama_embed(client: httpx.Client, url: str, model: str,
                             timeout=300)
             r.raise_for_status()
             return r.json()["embeddings"]
-        out.extend(_retry(_call))
-    return np.array(out, dtype=np.float32)
+        vectors = _validated_embeddings(_retry(_call), len(batch))
+        if out and len(out[0]) != vectors.shape[1]:
+            raise ValueError("embedding dimensions changed between batches")
+        out.extend(vectors.tolist())
+    return np.asarray(out, dtype=np.float32)
 
 
 def _normalize_name(s: str) -> str:
@@ -139,6 +162,21 @@ def _parse_vocab_response(raw: str) -> list[dict]:
     return ents if isinstance(ents, list) else []
 
 
+def _sanitize_entity(entity: object) -> dict | None:
+    """Model JSON can be syntactically valid while its field types are wrong."""
+    if not isinstance(entity, dict) or not isinstance(entity.get("name"), str):
+        return None
+    name = entity["name"].strip()
+    if not name or len(name) > 100:
+        return None
+    kind = entity.get("kind")
+    kind = kind.strip().lower()[:32] if isinstance(kind, str) else "other"
+    aliases = entity.get("aliases")
+    aliases = aliases if isinstance(aliases, list) else []
+    aliases = sorted({a.strip() for a in aliases if isinstance(a, str) and a.strip() and len(a) <= 100})
+    return {"name": name, "kind": kind or "other", "aliases": aliases}
+
+
 def discover_vocabulary(
     db_url: str, *, ollama_url: str, chat_model: str,
     samples_per_doc: int = 6, sample_chars: int = 1800,
@@ -149,12 +187,12 @@ def discover_vocabulary(
     docs/bugs/0003: `log` is typed as `Callable[[str], None] | None`.
     docs/bugs/0006: per-doc accepted/dropped counts are reported via `log`.
     """
-    with psycopg.connect(db_url) as conn, conn.cursor() as cur:
+    with _connect(db_url) as conn, conn.cursor() as cur:
         cur.execute("SELECT id, title FROM documents ORDER BY id")
         docs = cur.fetchall()
 
     vocab: dict[str, dict] = {}
-    with httpx.Client() as client, psycopg.connect(db_url) as conn:
+    with httpx.Client() as client, _connect(db_url) as conn:
         for doc_id, title in docs:
             with conn.cursor() as cur:
                 cur.execute(
@@ -171,12 +209,14 @@ def discover_vocabulary(
                 raw = _ollama_chat(client, ollama_url, chat_model, SYSTEM_VOCAB, user)
                 ents = _parse_vocab_response(raw)
             except Exception as e:
-                if log: log(f"  doc {doc_id} '{title}': vocab call failed — {e}")
+                if log:
+                    log(f"  doc {doc_id} '{title}': vocab call failed — {e}")
                 continue
             n_accepted = 0
             n_dropped = 0
             for e in ents:
-                if not isinstance(e, dict):
+                e = _sanitize_entity(e)
+                if e is None:
                     n_dropped += 1
                     continue
                 name = (e.get("name") or "").strip()
@@ -188,7 +228,7 @@ def discover_vocabulary(
                            if isinstance(a, str) and a.strip() and len(a) <= 100]
                 key = _normalize_name(name)
                 if key in vocab:
-                    vocab[key]["aliases"] = list({*vocab[key]["aliases"], *aliases})
+                    vocab[key]["aliases"] = sorted({*vocab[key]["aliases"], *aliases})
                 else:
                     vocab[key] = {"name": name, "kind": kind, "aliases": aliases}
                 n_accepted += 1
@@ -208,7 +248,7 @@ def find_mentions(db_url: str, vocab: list[dict]) -> dict[str, set[int]]:
         patterns[_normalize_name(ent["name"])] = [_entity_regex(n) for n in names]
 
     mentions: dict[str, set[int]] = defaultdict(set)
-    with psycopg.connect(db_url) as conn, conn.cursor(name="chunkscan") as cur:
+    with _connect(db_url) as conn, conn.cursor(name="chunkscan") as cur:
         cur.itersize = 2000
         cur.execute("SELECT id, text FROM chunks")
         for cid, text in cur:
@@ -226,14 +266,16 @@ def compute_entity_embeddings(
     if not all_chunk_ids:
         return {}
     chunk_embs: dict[int, np.ndarray] = {}
-    with psycopg.connect(db_url) as conn:
+    with _connect(db_url) as conn:
         register_vector(conn)
         with conn.cursor(name="embscan") as cur:
             cur.itersize = 1000
-            cur.execute("SELECT id, embedding FROM chunks WHERE id = ANY(%s)",
+            cur.execute("SELECT id, embedding FROM chunks WHERE id = ANY(%s) AND embedding IS NOT NULL",
                         (all_chunk_ids,))
             for cid, emb in cur:
                 v = np.array(emb, dtype=np.float32)
+                if v.ndim != 1 or not v.size or not np.isfinite(v).all() or not np.any(v):
+                    continue
                 n = np.linalg.norm(v)
                 if n > 0:
                     v = v / n
@@ -256,23 +298,28 @@ def build_edges(
     top_k: int, min_sim: float,
 ) -> list[tuple[int, int, float]]:
     n = len(keys)
+    if top_k < 1 or not np.isfinite(min_sim):
+        raise ValueError("top_k must be positive and min_sim must be finite")
     if n < 2:
         return []
-    sim = embeddings @ embeddings.T
-    np.fill_diagonal(sim, -1.0)
     k = min(top_k, n - 1)
-    top_idx = np.argpartition(-sim, kth=k - 1, axis=1)[:, :k]
+    block_size = max(1, int(os.getenv("SKEIN_EDGE_BLOCK_SIZE", "256")))
     out: dict[tuple[int, int], float] = {}
-    for i in range(n):
-        for j in top_idx[i]:
-            j = int(j)
-            s = float(sim[i, j])
-            if s < min_sim or i == j:
-                continue
-            a, b = (i, j) if i < j else (j, i)
-            if (a, b) not in out or s > out[(a, b)]:
-                out[(a, b)] = s
-    return [(a, b, s) for (a, b), s in out.items()]
+    for start in range(0, n, block_size):
+        stop = min(n, start + block_size)
+        sim = embeddings[start:stop] @ embeddings.T
+        sim[np.arange(stop - start), np.arange(start, stop)] = -1.0
+        top_idx = np.argpartition(-sim, kth=k - 1, axis=1)[:, :k]
+        for local, neighbors in enumerate(top_idx):
+            i = start + local
+            for j in neighbors:
+                j = int(j)
+                score = float(sim[local, j])
+                if score < min_sim or i == j:
+                    continue
+                a, b = sorted((i, j))
+                out[(a, b)] = max(score, out.get((a, b), -1.0))
+    return [(a, b, score) for (a, b), score in out.items()]
 
 
 # ─── snap_predicates: phase helpers (docs/bugs/0009) ────────────────────────
@@ -309,7 +356,7 @@ def _fetch_chunk_texts(db_url: str, chunk_ids: list[int]) -> dict[int, str]:
     if not chunk_ids:
         return {}
     needed = sorted(set(chunk_ids))
-    with psycopg.connect(db_url) as conn, conn.cursor() as cur:
+    with _connect(db_url) as conn, conn.cursor() as cur:
         cur.execute("SELECT id, text FROM chunks WHERE id = ANY(%s)", (needed,))
         return {cid: t for cid, t in cur.fetchall()}
 
@@ -439,7 +486,7 @@ def snap_predicates(
 
 
 def fingerprint(db_url: str) -> str:
-    with psycopg.connect(db_url) as conn, conn.cursor() as cur:
+    with _connect(db_url) as conn, conn.cursor() as cur:
         cur.execute("SELECT COUNT(*), COALESCE(MAX(id),0) FROM chunks")
         nc, mc = cur.fetchone()
         cur.execute("SELECT COUNT(*), COALESCE(MAX(id),0) FROM documents")
@@ -474,6 +521,8 @@ def build_skein(
     log("3/4 computing entity embeddings (mean of chunk vectors)…")
     embs_dict = compute_entity_embeddings(db_url, mentions)
     keys = [k for k in keys if k in embs_dict]
+    if not keys:
+        raise RuntimeError("no usable entities discovered; previous Skein graph preserved")
     keep = set(keys)
     vocab = [v for v in vocab if _normalize_name(v["name"]) in keep]
     names_canonical = [v["name"] for v in vocab]
@@ -488,6 +537,8 @@ def build_skein(
         edges=raw_edges, predicates=predicates, window=window, log=log,
     )
 
+    if fingerprint(db_url) != fp:
+        raise RuntimeError("corpus changed during build; previous Skein graph preserved; retry build")
     log("persisting…")
     persist(db_url, vocab, mentions, keys, embeddings, raw_edges, pred_map, fp)
 
@@ -509,7 +560,7 @@ def persist(
     pred_map: dict[tuple[int, int], tuple[str, list[int]]],
     fp: str,
 ):
-    with psycopg.connect(db_url) as conn:
+    with _connect(db_url) as conn:
         register_vector(conn)
         with conn.cursor() as cur:
             cur.execute("DELETE FROM skein_relations")
@@ -554,7 +605,7 @@ def persist(
 
 
 def neighbors_of(db_url: str, name: str, *, limit: int = 20) -> dict:
-    with psycopg.connect(db_url) as conn, conn.cursor() as cur:
+    with _connect(db_url) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT id, name, kind, mentions FROM skein_entities WHERE name_norm = %s",
             (_normalize_name(name),),
