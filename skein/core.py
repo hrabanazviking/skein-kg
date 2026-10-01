@@ -27,6 +27,7 @@ import httpx
 import numpy as np
 import psycopg
 from pgvector.psycopg import register_vector
+from skein.build_guard import Vocabulary, build_lock, coverage, ensure_lock
 
 
 def _connect(db_url: str) -> psycopg.Connection:
@@ -43,6 +44,14 @@ def _validated_embeddings(payload: object, expected: int) -> np.ndarray:
             or not np.isfinite(vectors).all() or not np.all(np.any(vectors, axis=1))):
         raise ValueError("embedding service returned invalid or incomplete vectors")
     return vectors
+
+
+def _unit_rows(vectors: np.ndarray) -> np.ndarray:
+    values = np.asarray(vectors, dtype=np.float64)
+    norms = np.linalg.norm(values, axis=1, keepdims=True)
+    if not np.isfinite(norms).all() or not np.all(norms > 0):
+        raise ValueError("Cannot normalize invalid embedding vectors")
+    return (values / norms).astype(np.float32)
 
 
 # docs/bugs/0004: stable shape of build_skein's return value.
@@ -147,18 +156,26 @@ def _entity_regex(name: str) -> re.Pattern:
     return re.compile(rf"(?<!\w){body}(?!\w)", re.IGNORECASE | re.UNICODE)
 
 
-def _parse_vocab_response(raw: str) -> list[dict]:
+def _parse_vocab_response(raw: str, *, strict: bool = False) -> list[dict]:
     raw = raw.strip()
     if raw.startswith("```"):
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw).strip()
     m = re.search(r"\{.*\}", raw, re.S)
     if not m:
+        if strict:
+            raise ValueError("Missing vocabulary JSON")
         return []
     try:
         d = json.loads(m.group(0))
     except json.JSONDecodeError:
+        if strict:
+            raise ValueError("Malformed vocabulary JSON") from None
         return []
     ents = d.get("entities") if isinstance(d, dict) else None
+    if strict and not isinstance(ents, list):
+        raise ValueError("Vocabulary entities must be a list")
+    if strict and ents and not any(_sanitize_entity(entity) for entity in ents):
+        raise ValueError("Vocabulary response contains no valid entity records")
     return ents if isinstance(ents, list) else []
 
 
@@ -177,6 +194,22 @@ def _sanitize_entity(entity: object) -> dict | None:
     return {"name": name, "kind": kind or "other", "aliases": aliases}
 
 
+def _merge_vocabulary(vocab: dict, entities: list[dict]) -> tuple[int, int]:
+    accepted, dropped = 0, 0
+    for entity in entities:
+        entity = _sanitize_entity(entity)
+        if entity is None:
+            dropped += 1
+            continue
+        key = _normalize_name(entity["name"])
+        if key in vocab:
+            vocab[key]["aliases"] = sorted({*vocab[key]["aliases"], *entity["aliases"]})
+        else:
+            vocab[key] = entity
+        accepted += 1
+    return accepted, dropped
+
+
 def discover_vocabulary(
     db_url: str, *, ollama_url: str, chat_model: str,
     samples_per_doc: int = 6, sample_chars: int = 1800,
@@ -192,6 +225,7 @@ def discover_vocabulary(
         docs = cur.fetchall()
 
     vocab: dict[str, dict] = {}
+    failed = 0
     with httpx.Client() as client, _connect(db_url) as conn:
         for doc_id, title in docs:
             with conn.cursor() as cur:
@@ -202,42 +236,22 @@ def discover_vocabulary(
                 )
                 samples = [r[0][:sample_chars] for r in cur.fetchall()]
             if not samples:
+                failed += 1
                 continue
             user = (f"Document title: {title}\n\nExcerpts:\n\n" +
                     "\n\n---\n\n".join(samples) + "\n\nJSON:")
             try:
                 raw = _ollama_chat(client, ollama_url, chat_model, SYSTEM_VOCAB, user)
-                ents = _parse_vocab_response(raw)
+                ents = _parse_vocab_response(raw, strict=True)
             except Exception as e:
+                failed += 1
                 if log:
                     log(f"  doc {doc_id} '{title}': vocab call failed — {e}")
                 continue
-            n_accepted = 0
-            n_dropped = 0
-            for e in ents:
-                e = _sanitize_entity(e)
-                if e is None:
-                    n_dropped += 1
-                    continue
-                name = (e.get("name") or "").strip()
-                if not name or len(name) > 100:
-                    n_dropped += 1
-                    continue
-                kind = (e.get("kind") or "other").strip().lower()[:32] or "other"
-                aliases = [a.strip() for a in (e.get("aliases") or [])
-                           if isinstance(a, str) and a.strip() and len(a) <= 100]
-                key = _normalize_name(name)
-                if key in vocab:
-                    vocab[key]["aliases"] = sorted({*vocab[key]["aliases"], *aliases})
-                else:
-                    vocab[key] = {"name": name, "kind": kind, "aliases": aliases}
-                n_accepted += 1
+            accepted, dropped = _merge_vocabulary(vocab, ents)
             if log:
-                if n_dropped:
-                    log(f"  doc {doc_id} '{title}': +{n_accepted} (dropped {n_dropped} malformed)")
-                else:
-                    log(f"  doc {doc_id} '{title}': +{n_accepted} entities")
-    return list(vocab.values())
+                log(f"  doc {doc_id} {title!r}: +{accepted} (dropped {dropped} malformed)")
+    return Vocabulary(vocab.values(), len(docs), failed)
 
 
 def find_mentions(db_url: str, vocab: list[dict]) -> dict[str, set[int]]:
@@ -276,7 +290,7 @@ def compute_entity_embeddings(
                 v = np.array(emb, dtype=np.float32)
                 if v.ndim != 1 or not v.size or not np.isfinite(v).all() or not np.any(v):
                     continue
-                n = np.linalg.norm(v)
+                n = np.linalg.norm(v.astype(np.float64))
                 if n > 0:
                     v = v / n
                 chunk_embs[cid] = v
@@ -286,10 +300,9 @@ def compute_entity_embeddings(
         if not vs:
             continue
         m = np.mean(vs, axis=0)
-        n = np.linalg.norm(m)
-        if n > 0:
-            m = m / n
-        out[key] = m
+        n = np.linalg.norm(m.astype(np.float64))
+        if np.isfinite(n) and n > 0:
+            out[key] = (m / n).astype(np.float32)
     return out
 
 
@@ -333,7 +346,7 @@ def _embed_predicate_vocabulary(
             client, ollama_url, embed_model,
             [f"is {p.replace('_', ' ')}" for p in predicates],
         )
-    return pred_emb / np.clip(np.linalg.norm(pred_emb, axis=1, keepdims=True), 1e-9, None)
+    return _unit_rows(pred_emb)
 
 
 def _cooccurrence_chunks_per_edge(
@@ -426,7 +439,7 @@ def _snap_best_predicates(
     """Embed the spans, mean-pool per edge, snap to the nearest predicate."""
     with httpx.Client() as client:
         span_emb = _ollama_embed(client, ollama_url, embed_model, span_texts)
-    span_emb = span_emb / np.clip(np.linalg.norm(span_emb, axis=1, keepdims=True), 1e-9, None)
+    span_emb = _unit_rows(span_emb)
     out: dict[tuple[int, int], tuple[str, list[int]]] = {}
     for (a, b), idxs in span_groups.items():
         v = np.mean(span_emb[idxs], axis=0)
@@ -500,6 +513,15 @@ def build_skein(
     top_k: int = 6, min_sim: float = 0.55, window: int = 120,
     log: Callable[[str], None] = print,
 ) -> SkeinBuildStats:
+    with build_lock(db_url) as lock_connection:
+        return _build_locked(db_url, ollama_url=ollama_url, embed_model=embed_model,
+                             chat_model=chat_model, predicates=predicates, top_k=top_k,
+                             min_sim=min_sim, window=window, log=log, lock_connection=lock_connection)
+
+
+def _build_locked(db_url: str, *, ollama_url: str, embed_model: str, chat_model: str,
+                  predicates: list[str] | None, top_k: int, min_sim: float,
+                  window: int, log: Callable[[str], None], lock_connection) -> SkeinBuildStats:
     from skein.schema import schema_apply
     schema_apply(db_url)
     predicates = predicates or DEFAULT_PREDICATES
@@ -509,6 +531,7 @@ def build_skein(
     t0 = time.time()
     log("1/4 discovering entity vocabulary (1 LLM call per document)…")
     vocab = discover_vocabulary(db_url, ollama_url=ollama_url, chat_model=chat_model, log=log)
+    discovery = coverage(vocab)
     log(f"   → {len(vocab)} unique entities")
 
     log("2/4 finding mentions across all chunks (regex)…")
@@ -540,9 +563,14 @@ def build_skein(
     if fingerprint(db_url) != fp:
         raise RuntimeError("corpus changed during build; previous Skein graph preserved; retry build")
     log("persisting…")
-    persist(db_url, vocab, mentions, keys, embeddings, raw_edges, pred_map, fp)
+    ensure_lock(lock_connection)
+    persist(db_url, vocab, mentions, keys, embeddings, raw_edges, pred_map, fp, discovery=discovery)
 
-    dt = time.time() - t0
+    return _build_stats(vocab, mentions, pred_map, t0, log)
+
+
+def _build_stats(vocab, mentions, pred_map, started, log) -> SkeinBuildStats:
+    dt = time.time() - started
     stats = {
         "n_entities": len(vocab),
         "n_mentions": sum(len(s) for s in mentions.values()),
@@ -559,6 +587,7 @@ def persist(
     edges: list[tuple[int, int, float]],
     pred_map: dict[tuple[int, int], tuple[str, list[int]]],
     fp: str,
+    *, discovery: dict | None = None,
 ):
     with _connect(db_url) as conn:
         register_vector(conn)
@@ -599,7 +628,7 @@ def persist(
             cur.execute(
                 "INSERT INTO skein_build (fingerprint, stats) VALUES (%s, %s)",
                 (fp, json.dumps({"n_entities": len(vocab),
-                                 "n_edges": len(rel_rows)})),
+                                 "n_edges": len(rel_rows), "discovery": discovery or {}})),
             )
         conn.commit()
 

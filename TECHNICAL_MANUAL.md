@@ -98,15 +98,22 @@ max-ID change aborts before replacement. Persistence failure rolls back that
 transaction. Source tables are not deleted or modified by the build.
 
 The fingerprint is count/max-ID based; it is not a full source-content hash and
-does not detect every in-place edit. Avoid concurrent writers and independent CLI
-builds. Bifröst prevents overlapping builds it launches itself; it is not a
-machine-wide lock against other tools.
+does not detect every in-place edit. Avoid concurrent in-place source edits. Skein 0.1.1 holds a PostgreSQL session
+advisory lock across the full build, shared by CLI and Bifröst-launched builds.
+A second builder on the same database refuses to run. The lock releases when its
+session ends, including a crashed process. This cooperative lock does not constrain
+older versions or unrelated SQL tools.
 
 Entity/relation IDs can change after a rebuild. Keep durable citations as source
 chunk/document IDs rather than bookmarking a derived entity ID as permanent.
-Per-document vocabulary failures can be skipped while other documents succeed;
-inspect warnings and count changes before treating a completed build as full
-coverage. Old `skein_build` records remain history, not independent snapshots of
+Per-document vocabulary failures are counted, including malformed response JSON,
+wrong entity-list shape and entirely invalid entity records. A valid empty list is
+accepted. By default more than 10% failed documents aborts before graph publication.
+Set `SKEIN_MAX_FAILED_DOCUMENTS_PERCENT` to a finite value from 0 to 100 to change
+that ceiling; reducing it strengthens completeness requirements. A threshold of
+100 intentionally permits severe missing coverage and should not be used to hide
+an outage. Coverage counts/percentage are stored in `skein_build.stats.discovery`.
+Inspect warnings and coverage before treating a completed build as full coverage. Old `skein_build` records remain history, not independent snapshots of
 each prior graph's entity rows.
 
 ## 5. Use from Bifröst
@@ -201,3 +208,22 @@ git status --short
 
 See [INTERFACE.md](INTERFACE.md), [skein/README_AI.md](skein/README_AI.md),
 [ARCHITECTURE.md](ARCHITECTURE.md) and [DEVLOG.md](DEVLOG.md) for contracts/history.
+
+## 10. Build recovery boundaries (0.1.1)
+
+- `SKEIN_DB_CONNECT_TIMEOUT` defaults to 5 seconds for the build-lock session.
+- `SKEIN_MAX_FAILED_DOCUMENTS_PERCENT` defaults to 10; settings are validated.
+- The advisory lock namespace is configured in `skein/build.defaults.json`.
+  All cooperating installations must use the same namespace.
+- Lost locking sessions refuse publication. Empty usable entities, changed source
+  fingerprints, failed embeddings or excessive discovery failures preserve the
+  previous graph. Correct the cause and start a deliberate new build.
+- Replacement of derived rows and addition of build history remain one atomic
+  transaction. No source schema/row is repaired or deleted by a failed build.
+- Bifröst uses the build ID plus source fingerprint for its v2 entity cache and
+  reads entity/relation rows in one repeatable-read snapshot. Old cached layouts
+  are kept while a replacement build is in progress.
+
+Run `uv run --frozen pytest -q` from the Skein root for fault and invariant tests.
+Bifröst also provides opt-in isolated-database tests for concurrent build locks.
+Do not run a full production rebuild just to check that locking works.

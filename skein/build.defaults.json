@@ -1,0 +1,4 @@
+{
+  "max_failed_documents_percent": 10,
+  "lock_namespace": "skein.build_skein.v1"
+}

@@ -155,3 +155,13 @@ derived-table ownership and transactional replacement, count/max-ID fingerprint
 limits, model/language compatibility, Python API and Bifröst's separate entity
 layout. Inspected source and CLI help and checked documentation links. This
 documentation task changes no source data, credentials or runtime behavior.
+
+## 2026-10-01 — ingestion and build self-healing
+
+Implemented the committed recovery task brief. Strengthened domain boundaries,
+classified failures and bounded retries; preserved original source data and private
+configuration. Updated technical/manual contracts and failure-oriented regression
+coverage. Bifröst additionally proves exact Unicode payload mounting/replay and
+append-only privileges against an isolated PostgreSQL database and real Ollama.
+Production source integrity is checked with the read-only ingest doctor. See the
+recovery task brief and technical manual for behavior and operating limits.

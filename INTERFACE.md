@@ -146,3 +146,14 @@ Database connection setup has a bounded timeout. Embedding response cardinality,
 dimensions, finiteness and nonzero vectors are validated before use. Existing
 public function signatures remain stable.
 Vocabulary fields are type-checked before normalization. Empty usable discovery or source changes during a build raise an actionable error and retain the previous graph. Cosine edge work uses configurable row blocks. SKEIN_DB_CONNECT_TIMEOUT and SKEIN_EDGE_BLOCK_SIZE configure connection and memory behavior. Optional dimension probes roll back their savepoint when unavailable.
+
+## Build recovery in 0.1.1
+
+The public build_skein signature and statistics return shape are unchanged.
+Builds acquire a cooperative database session advisory lock before schema or
+model work and refuse overlapping builders. Discovery failures, including bad
+model JSON/shape, are recorded; more than SKEIN_MAX_FAILED_DOCUMENTS_PERCENT
+(default 10) aborts before publication. Coverage is recorded in
+skein_build.stats.discovery. Empty usable graphs, source fingerprint changes and
+failed computations preserve the last derived graph. This does not authorize
+source writes or automatic model/data fabrication.
