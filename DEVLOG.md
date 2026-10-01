@@ -147,3 +147,11 @@ first round of invariant tests.
 Implemented the authorized task in TASK_second_brain_resilience.md. Preserved source
 corpus and private configuration. Added behavioral regressions, verified live boundaries,
 and documented recovery contracts. Validation details are recorded in the task report.
+
+## Technical manual — 2026-10-01
+
+Added TECHNICAL_MANUAL.md and README navigation: setup/configuration, build/tuning,
+derived-table ownership and transactional replacement, count/max-ID fingerprint
+limits, model/language compatibility, Python API and Bifröst's separate entity
+layout. Inspected source and CLI help and checked documentation links. This
+documentation task changes no source data, credentials or runtime behavior.

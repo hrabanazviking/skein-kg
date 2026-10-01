@@ -69,3 +69,5 @@ making each one independently testable.
   Truth.)
 - Use `print()` in `core.py`. Pass progress through the `log=` callable so
   the caller decides.
+Operator setup, build/recovery procedures and Python usage are documented in
+[TECHNICAL_MANUAL.md](../TECHNICAL_MANUAL.md).

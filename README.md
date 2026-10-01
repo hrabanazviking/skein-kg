@@ -6,6 +6,9 @@
 
 # Skein
 
+Read the [technical manual](TECHNICAL_MANUAL.md) for setup, build/tuning commands,
+transactional graph replacement, evidence, Python/API use and recovery procedures.
+
 > *a coil of threads connecting names*
 
 Skein builds a **knowledge graph** (entities + typed relations + provenance) over a corpus of text chunks **without ever running autoregressive LLM extraction per chunk.** It's designed for laptop-scale corpora (10k–500k chunks) where you've already got embeddings sitting in a vector store.
@@ -140,5 +143,4 @@ Support is always appreciated, but never required. Using, sharing, testing, cont
 ![https://raw.githubusercontent.com/hrabanazviking/skein-kg/refs/heads/main/IMG_0665.jpeg](https://raw.githubusercontent.com/hrabanazviking/skein-kg/refs/heads/main/IMG_0665.jpeg)
 
 ---
-
 
