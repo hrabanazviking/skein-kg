@@ -68,3 +68,9 @@ The user-approved [managed raw library design](https://github.com/hrabanazviking
 - Tests must cover duplicate across folders, relocation without re-embedding, independent change to a copied file, verified deletion, disconnected root and graph rollback.
 
 **No running implementation is claimed by updating this task document.**
+
+## Long-/medium-/short-term memory boundary (owner decision 2026-11-19)
+
+[Authoritative three-tier specification](https://github.com/hrabanazviking/bifrost-viewer/blob/docs/second-brain-incremental-multimodal-gateway-2026-11-19/docs/roadmaps/SECOND_BRAIN_THREE_TIER_MEMORY_ARCHITECTURE_2026-11-19.md): **long-term accepted source records are immutable**, **medium-term focus domains and association weights are mutable**, and **short-term task/chat context is volatile and expires**.
+
+Skein builds versioned *derived* graph generations from stable long-term source evidence. Do not UPDATE/DELETE archived long-term facts because graph evidence changed. Corrected input is a NEW source/version with supersession and provenance. When current source revisions change, retract their old *derived* evidence in the staged generation and publish atomically after tests; the original long-term version remains archived. Focus-domain/category weights are managed by Bifröst's mutable medium layer; such changes should adjust ranking/cheap association edges only, with **zero LLM extraction and no full graph rebuild**. Short-term conversations must never appear as persistent Skein input, graph evidence, build history or model prompt cache unless explicitly and separately archived by the owner. External character reads never write to Skein or association tables. Test old archive hashes, append-only correction, graph pointer rollback, no-change/focus-only zero-model work, and TTL-session sentinel exclusion.
