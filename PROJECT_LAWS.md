@@ -1,8 +1,7 @@
 # PROJECT_LAWS.md — Skein
-## *Immutable Rules*
+## *Current Project Laws (revised 2026-11-19)*
 
-> These rules are non-negotiable. A change that breaks one is a different
-> project, not an evolution of this one.
+> Owner-approved newer decisions supersede conflicting older project rules. The 2026-11-04 Bifröst Second Brain master expansion roadmap requires incremental processing as the preferred future normal mode. Maintain backward-compatible full-build behavior and data preservation until an incremental replacement has passed tests; do not mistake the legacy code's current limitations for the system's governing requirements. These laws may evolve through documented, owner-authorized revisions.
 
 ---
 
@@ -32,12 +31,13 @@ claim.
 Skein **reads** from `documents` and `chunks`. Skein **never writes to or
 schema-modifies** them. Skein owns the `skein_*` namespace and nothing more.
 
-## Law of Idempotent Builds
+## Law of Incremental-First, Versioned, Atomic Graph Updates
 
-`skein build` is idempotent at the row level: it deletes all existing
-`skein_entities`, `skein_entity_chunks`, `skein_relations` rows in a single
-transaction before writing fresh ones. There is no "incremental" mode. If
-the source changed, rebuild the whole graph — it is cheap enough.
+**Design authority (2026-11-19):** Newer owner-approved incremental architecture supersedes the former "no incremental" rule. The desired normal update path is `incremental_v2`: inspect durable source ID/revision/hash deltas, reuse compatible extraction caches, retract obsolete per-source evidence, update affected graph neighborhoods and publish a validated generation atomically. No global rebuild merely because a document was added, changed, or removed, and no graph rebuild when an API connection changes.
+
+**Backward compatibility:** The existing `skein build` / `build_skein()` full-build implementation continues to have its currently tested, atomic, reproducible behavior until an independently versioned incremental path is implemented, benchmarked, verified on a cloned database and approved for production. The original full build remains an explicitly selectable recovery/reconciliation operation thereafter. This law changes the project requirement; it does **not** claim that incremental code is already deployed.
+
+**Preservation:** A failed or partial incremental run must never replace the last known-good published graph or modify canonical `documents`/`chunks` source records. Persist per-document cache and stage checkpoints; preserve attributable evidence, versioned embedding/model identities, quality checks, safe rollback, pause/resume, and owner-approved full reconciliation. New public APIs extend rather than silently change existing signatures.
 
 ## Law of Determinism
 
