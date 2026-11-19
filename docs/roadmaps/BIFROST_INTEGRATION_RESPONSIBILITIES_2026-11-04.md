@@ -54,3 +54,17 @@ The owner expressly confirms that the November 4 incremental design supersedes t
 Priority tests: ten additions change only delta-dependent extraction/relations; edit/retraction removes stale evidence but preserves unrelated facts; an unchanged source yields zero inference calls; no DB rebuild on a new API client connection; interrupts preserve published graph and resume checkpoints. Vision-derived captions should arrive via Ingest as sourced derived evidence; visual embeddings and raw image assets belong to Bifröst's multimodal adapters, not forced into Skein's original text vector space. Use separate graph derivatives only when lineage and model identity are proved.
 
 **Canonical new requirements:** [Bifröst 2026-11-19 additive multimodal and visual lore roadmap](https://github.com/hrabanazviking/bifrost-viewer/blob/docs/second-brain-incremental-multimodal-gateway-2026-11-19/docs/roadmaps/SECOND_BRAIN_ADDITIVE_INCREMENTAL_MULTIMODAL_GATEWAY_2026-11-19.md). After its canonical merger, update the link to the main-branch document. No deployment is implied by this roadmap change.
+
+## Managed raw folder categories and copy/move reconciliation (2026-11-19)
+
+The user-approved [managed raw library design](https://github.com/hrabanazviking/bifrost-viewer/blob/docs/second-brain-incremental-multimodal-gateway-2026-11-19/docs/roadmaps/SECOND_BRAIN_MANAGED_RAW_LIBRARY_FOLDERS_2026-11-19.md) makes physical folder ancestry part of provenance, while content hashes permit reuse of compatible derived computation.
+
+- Ingest owns source instance IDs, physical path history, category ancestry and canonical document versions; **Skein does not crawl folders or alter raw files**.
+- Treat a path-only move or folder reclassification as a cheap category-edge delta, not an LLM/embedding/whole-graph operation.
+- If the same bytes are copied to another folder, represent a second source/location and its category evidence without duplicating content-level extraction or embeddings.
+- If an existing source is edited, retract obsolete per-source evidence, reuse compatible unchanged chunks and rerun only changed material and affected entities/neighbors.
+- Preserve multiple surviving locations when the original copy remains. Do not infer a move from identical bytes alone. Root unavailability must never trigger an automatic data deletion.
+- Preserve provenance, source revision and content/model-version identities in staged graph generations. The prior published generation remains usable until the delta passes validation.
+- Tests must cover duplicate across folders, relocation without re-embedding, independent change to a copied file, verified deletion, disconnected root and graph rollback.
+
+**No running implementation is claimed by updating this task document.**
