@@ -84,8 +84,15 @@ auditable.
 4. **Reads from `documents` and `chunks`; writes only to `skein_*`.** The
    parent corpus is sacred. Skein touches no schema it did not create.
 
-5. **Idempotent builds.** `skein build` wipes prior `skein_*` rows in one
-   transaction and rebuilds. No partial state. No "incremental" mode.
+5. **Incremental-first with atomic publication (updated 2026-11-19).** The latest
+   owner-approved roadmap supersedes the older permanent "no incremental" position.
+   The legacy `skein build` still performs its current full atomic rebuild until
+   `incremental_v2` is implemented and proven safe. Future ordinary source updates
+   operate only on affected evidence and graph neighborhoods, stage and validate
+   an immutable generation, then atomically publish it. Explicit full rebuilding
+   remains available for reconciliation and recovery, never as an automatic
+   consequence of a routine change. This is a governing design decision, not
+   a claim that the new engine has shipped.
 
 6. **No `print()` in library code.** Progress is reported through the
    `log=` callable that callers provide.

@@ -46,3 +46,11 @@ Turn the existing efficient full-build algorithm into a versioned, checkpointed,
 
 **Canonical authority:** The primary Bifröst Viewer roadmap above resolves conflicts; individual source code and verified deployed evidence establish what is actually implemented.
 
+
+## 2026-11-19 superseding implementation guidance
+
+The owner expressly confirms that the November 4 incremental design supersedes the older prohibition. The updated [PROJECT_LAWS](../../PROJECT_LAWS.md) and [PHILOSOPHY](../../PHILOSOPHY.md) now make incremental updates the **target normal path**. Do not rewrite source documents or require `skein build` after every source/connection update. Keep the existing full-build `build_skein()` API functioning while new `incremental_v2` stages are implemented and tested.
+
+Priority tests: ten additions change only delta-dependent extraction/relations; edit/retraction removes stale evidence but preserves unrelated facts; an unchanged source yields zero inference calls; no DB rebuild on a new API client connection; interrupts preserve published graph and resume checkpoints. Vision-derived captions should arrive via Ingest as sourced derived evidence; visual embeddings and raw image assets belong to Bifröst's multimodal adapters, not forced into Skein's original text vector space. Use separate graph derivatives only when lineage and model identity are proved.
+
+**Canonical new requirements:** [Bifröst 2026-11-19 additive multimodal and visual lore roadmap](https://github.com/hrabanazviking/bifrost-viewer/blob/docs/second-brain-incremental-multimodal-gateway-2026-11-19/docs/roadmaps/SECOND_BRAIN_ADDITIVE_INCREMENTAL_MULTIMODAL_GATEWAY_2026-11-19.md). After its canonical merger, update the link to the main-branch document. No deployment is implied by this roadmap change.
